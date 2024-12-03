@@ -1,0 +1,60 @@
+diff --git a/dlls/kernelbase/memory.c b/dlls/kernelbase/memory.c
+index 4f4bba9a13b7687e9f8f90dbac5a8281c4dbc3af..0f4744595077ee4b0472d14651eef3c1acddb76e 100644
+--- a/dlls/kernelbase/memory.c
++++ b/dlls/kernelbase/memory.c
+@@ -41,6 +41,33 @@ WINE_DEFAULT_DEBUG_CHANNEL(heap);
+ WINE_DECLARE_DEBUG_CHANNEL(virtual);
+ WINE_DECLARE_DEBUG_CHANNEL(globalmem);
+ 
++long get_globalmemorystatusex_cache_window(void)
++{
++    static long globalmemorystatusex_cache_window = -1;
++
++    if (globalmemorystatusex_cache_window == -1)
++    {
++        char str[64];
++        DWORD n;
++        memset(str, 0, sizeof(str));
++
++        // Default to 1000 ms
++        globalmemorystatusex_cache_window = 1000;
++
++        n = GetEnvironmentVariableA("WINE_GLOBALMEMORYSTATUSEX_CACHE_WINDOW", str, sizeof(str));
++
++        if (0 < n && n < sizeof(str))
++        {
++            long res = strtol(str, NULL, 10);
++            
++            if (res != LONG_MIN && res != LONG_MAX)
++            {
++                globalmemorystatusex_cache_window = res;
++            }
++        }
++    }
++    return globalmemorystatusex_cache_window;
++}
+ 
+ /***********************************************************************
+  * Virtual memory functions
+@@ -1215,10 +1242,18 @@ BOOL WINAPI DECLSPEC_HOTPATCH GlobalMemoryStatusEx( MEMORYSTATUSEX *status )
+         SetLastError( ERROR_INVALID_PARAMETER );
+         return FALSE;
+     }
+-    if ((NtGetTickCount() - last_check) < 1000)
++    /* Don't bother checking the time since our last update if the cache window is 0.
++       This ensures that a cache window of '0' is guaranteed to disable the cache completely.
++       On Windows, the resolution of the GetTickCount function is limited to the resolution
++       of the system timer, which is typically in the range of 10 milliseconds to 16 milliseconds.
++    */
++    if (get_globalmemorystatusex_cache_window() > 0)
+     {
+-	*status = cached_status;
+-	return TRUE;
++        if ((NtGetTickCount() - last_check) < get_globalmemorystatusex_cache_window())
++        {
++            *status = cached_status;
++            return TRUE;
++        }
+     }
+     last_check = NtGetTickCount();
+ 

@@ -1,0 +1,6 @@
+<Project>
+	<PropertyGroup>
+		<BuildInParallel>false</BuildInParallel>
+		<StopOnFirstFailure>true</StopOnFirstFailure>
+	</PropertyGroup>
+</Project>

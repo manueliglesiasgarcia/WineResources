@@ -1,0 +1,210 @@
+diff --git a/dlls/ntdll/Makefile.in b/dlls/ntdll/Makefile.in
+index d3f2a0e55231e7e13251bc26059d6a73491895f7..7ffbb7c3b691435e628627b140a44c903c654d1a 100644
+--- a/dlls/ntdll/Makefile.in
++++ b/dlls/ntdll/Makefile.in
+@@ -4,7 +4,7 @@ UNIXLIB   = ntdll.so
+ IMPORTLIB = ntdll
+ IMPORTS   = $(MUSL_PE_LIBS) winecrt0
+ UNIX_CFLAGS  = $(UNWIND_CFLAGS)
+-UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS)
++UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) -lmemory-patches
+ 
+ EXTRADLLFLAGS = -nodefaultlibs
+ i386_EXTRADLLFLAGS = -Wl,--image-base,0x7bc00000
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 879a5893758e437a2eebc48f00fbc3b4fa2f3f16..f771e02d02b0693572b93a2aa8efab838d69be1d 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -36,6 +36,9 @@
+ #include <sys/time.h>
+ #include <time.h>
+ #include <dirent.h>
++
++# include <libmemory-patches.h>
++
+ #ifdef HAVE_SYS_PARAM_H
+ # include <sys/param.h>
+ #endif
+@@ -1952,33 +1955,11 @@ static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
+ 
+ #ifdef linux
+     {
+-        FILE *fp;
+-
+-        if ((fp = fopen("/proc/meminfo", "r")))
+-        {
+-            unsigned long long value, mem_available = 0;
+-            char line[64];
+-
+-            while (fgets(line, sizeof(line), fp))
+-            {
+-                if(sscanf(line, "MemTotal: %llu kB", &value) == 1)
+-                    totalram += value * 1024;
+-                else if(sscanf(line, "MemFree: %llu kB", &value) == 1)
+-                    freeram += value * 1024;
+-                else if(sscanf(line, "SwapTotal: %llu kB", &value) == 1)
+-                    totalswap += value * 1024;
+-                else if(sscanf(line, "SwapFree: %llu kB", &value) == 1)
+-                    freeswap += value * 1024;
+-                else if (sscanf(line, "Buffers: %llu", &value))
+-                    freeram += value * 1024;
+-                else if (sscanf(line, "Cached: %llu", &value))
+-                    freeram += value * 1024;
+-                else if (sscanf(line, "MemAvailable: %llu", &value))
+-                    mem_available = value * 1024;
+-            }
+-            fclose(fp);
+-            if (mem_available) freeram = mem_available;
+-        }
++        struct current_memory_info current_mem_values = get_current_memory_info();
++        totalram = current_mem_values.totalram;
++        freeram = current_mem_values.freeram;
++        totalswap = current_mem_values.totalswap;
++        freeswap = current_mem_values.freeswap;
+     }
+ #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__) || \
+     defined(__OpenBSD__) || defined(__DragonFly__) || defined(__APPLE__)
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index abe1b4dc4ec424c0864d18e726537e680d2ab883..09efdb5c1b59759050fa42184aebbcc07f71a3c3 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -75,6 +75,8 @@
+ #include "unix_private.h"
+ #include "wine/debug.h"
+ 
++#include <libmemory-patches.h>
++
+ WINE_DEFAULT_DEBUG_CHANNEL(virtual);
+ WINE_DECLARE_DEBUG_CHANNEL(module);
+ WINE_DECLARE_DEBUG_CHANNEL(virtual_ranges);
+@@ -228,12 +230,26 @@ static inline BOOL is_beyond_limit( const void *addr, size_t size, const void *l
+ /* mmap() anonymous memory at a fixed address */
+ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
+ {
++    BOOL write_requested = has_write_flags(prot);
++    if (overcommit_prevention_enabled() && write_requested && memory_available_for_commit(size) == FALSE)
++    {
++        WARN("Prevented memory mapping due to insufficient memory.\n");
++        errno = ENOMEM;
++        return MAP_FAILED;
++    }
+     return mmap( start, size, prot, MAP_PRIVATE | MAP_ANON | MAP_FIXED | flags, -1, 0 );
+ }
+ 
+ /* allocate anonymous mmap() memory at any address */
+ void *anon_mmap_alloc( size_t size, int prot )
+ {
++    BOOL write_requested = has_write_flags(prot);
++    if (overcommit_prevention_enabled() && write_requested && memory_available_for_commit(size) == FALSE)
++    {
++        WARN("Prevented memory mapping due to insufficient memory.\n");
++        errno = ENOMEM;
++        return MAP_FAILED;
++    }
+     return mmap( NULL, size, prot, MAP_PRIVATE | MAP_ANON, -1, 0 );
+ }
+ 
+@@ -390,6 +406,14 @@ static size_t unmap_area_above_user_limit( void *addr, size_t size )
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+ {
+     void *ptr;
++    BOOL write_requested = has_write_flags(prot);
++    
++    if (overcommit_prevention_enabled() && write_requested && memory_available_for_commit(size) == FALSE)
++    {
++        WARN("Prevented memory mapping due to insufficient memory.\n");
++        errno = ENOMEM;
++        return MAP_FAILED;
++    }
+ 
+ #ifdef MAP_FIXED_NOREPLACE
+     ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+@@ -3133,6 +3157,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+     HANDLE shared_file;
+     LARGE_INTEGER offset;
+     sigset_t sigset;
++    BOOL write_consumes_memory = FALSE;
+ 
+     switch(protect)
+     {
+@@ -3198,6 +3223,16 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+ 
+     if ((res = server_get_unix_fd( handle, 0, &unix_handle, &needs_close, NULL, NULL ))) return res;
+ 
++    /* determine whether writing to the view will consume physical memory */
++    write_consumes_memory = (protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_WRITECOPY);
++
++    /* if overcommit prevention is enabled then verify that we can satisfy any page commit requests */
++    if (write_consumes_memory && overcommit_prevention_enabled() && memory_available_for_commit(size) == FALSE)
++    {
++        WARN("Prevented page overcommit due to insufficient memory.\n");
++        return STATUS_NO_MEMORY;
++    }
++
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+ 
+     res = map_view( &view, base, size, alloc_type, vprot, limit_low, limit_high, 0 );
+@@ -3225,6 +3260,11 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+         *addr_ptr = view->base;
+         *size_ptr = size;
+         VIRTUAL_DEBUG_DUMP_VIEW( view );
++
++        /* if overcommit prevention is enabled and we performed a commit, then touch the commited pages */
++        if (write_consumes_memory && overcommit_prevention_enabled()) {
++            touch_committed_pages(view->base, size, protect);
++        }
+     }
+     else delete_view( view );
+ 
+@@ -4499,6 +4539,13 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+     if (type & MEM_RESERVE_PLACEHOLDER && (protect != PAGE_NOACCESS)) return STATUS_INVALID_PARAMETER;
+     if (!arm64ec_view && (attributes & MEM_EXTENDED_PARAMETER_EC_CODE)) return STATUS_INVALID_PARAMETER;
+ 
++    /* if overcommit prevention is enabled then verify that we can satisfy any page commit requests */
++    if ((type & MEM_COMMIT) && overcommit_prevention_enabled() && memory_available_for_commit(size) == FALSE)
++    {
++        WARN("Prevented page overcommit due to insufficient memory.\n");
++        return STATUS_NO_MEMORY;
++    }
++
+     /* Reserve the memory */
+ 
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+@@ -4557,6 +4604,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+     {
+         *ret = base;
+         *size_ptr = size;
++
++        /* if overcommit prevention is enabled and we performed a commit, then touch the commited pages */
++        if ((type & MEM_COMMIT) && overcommit_prevention_enabled()) {
++            touch_committed_pages(base, size, protect);
++        }
+     }
+     else if (status == STATUS_NO_MEMORY)
+         ERR( "out of memory for allocation, base %p size %08lx\n", base, size );
+@@ -4911,8 +4963,25 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         /* Make sure all the pages are committed */
+         if (get_committed_size( view, base, &vprot, VPROT_COMMITTED ) >= size && (vprot & VPROT_COMMITTED))
+         {
++            BOOL write_added = FALSE;
+             old = get_win32_prot( vprot, view->protect );
++            write_added = !has_write_flags(old) && has_write_flags(new_prot);
++
++            /* if overcommit prevention is enabled and write access is about to be granted then verify *
++             * that we have sufficient memory to write to the pages, since doing so may trigger the    *
++             * underlying operating system's copy-on-write mechanisms and increase physical memory use */
++            if (overcommit_prevention_enabled() && write_added && memory_available_for_commit(size) == FALSE)
++            {
++                WARN("Prevented protection change due to insufficient memory.\n");
++                return STATUS_NO_MEMORY;
++            }
++
+             status = set_protection( view, base, size, new_prot );
++
++            /* if overcommit prevention is enabled and write access was granted then touch the pages */
++            if (overcommit_prevention_enabled() && write_added) {
++                touch_committed_pages(base, size, new_prot);
++            }
+         }
+         else status = STATUS_NOT_COMMITTED;
+     }

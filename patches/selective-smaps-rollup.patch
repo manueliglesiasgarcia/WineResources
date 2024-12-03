@@ -1,0 +1,99 @@
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index 71eab55920d159ba39506939aa7dcba125a6da33..c3d03072f074fd374af4cf647a269f624dabcd1b 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -1224,7 +1224,8 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
+                     {
+                         SERVER_START_REQ(get_process_vm_counters)
+                         {
+-                            req->handle = wine_server_obj_handle( handle );
++                            req->process_handle = wine_server_obj_handle( handle );
++                            req->calling_thread_handle = wine_server_obj_handle( GetCurrentThread() );
+                             if (!(ret = wine_server_call( req )))
+                             {
+                                 pvmi.PeakVirtualSize = reply->peak_virtual_size;
+diff --git a/server/process.c b/server/process.c
+index a0d5ea64d97f1dcf80896081b750837c426a8e2f..41a996b188fe2d99d8849178f64c4aa0458acd44 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -63,6 +63,9 @@
+ #include "request.h"
+ #include "user.h"
+ #include "security.h"
++#include "unicode.h"
++
++static const WCHAR shader_compiling_thread[] = {'S','h','a','d','e','r','C','o','m','p','i','l','i','n','g','T','h','r','e','a','d'};
+ 
+ /* process object */
+ 
+@@ -1545,10 +1548,42 @@ DECL_HANDLER(get_process_image_name)
+     release_object( process );
+ }
+ 
++void fill_vm_counters_using_smaps( struct get_process_vm_counters_reply *pvmi, int unix_pid )
++{
++    FILE *f;
++    char line[256], path[32];
++    unsigned long value;
++
++    if (unix_pid == -1)
++        strcpy( path, "/proc/self/smaps_rollup" );
++    else
++        snprintf( path, sizeof(path), "/proc/%u/smaps_rollup", unix_pid);
++    f = fopen( path, "r" );
++    if (!f) return;
++
++    pvmi->pagefile_usage = 0;
++
++    while (fgets(line, sizeof(line), f))
++    {
++        if (sscanf(line, "Pss: %lu", &value)) /* Override VmRSS */
++            pvmi->working_set_size = (ULONG64)value * 1024;
++        else if (sscanf(line, "Pss_Anon: %lu", &value)) /* Override RssAnon */
++            pvmi->pagefile_usage += (ULONG64)value * 1024;
++        else if (sscanf(line, "SwapPss: %lu", &value)) /* Override VmSwap */
++            pvmi->pagefile_usage += (ULONG64)value * 1024;
++    }
++
++    fclose(f);
++}
++
+ /* retrieve information about a process memory usage */
+ DECL_HANDLER(get_process_vm_counters)
+ {
+-    struct process *process = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
++    struct process *process = get_process_from_handle( req->process_handle, PROCESS_QUERY_LIMITED_INFORMATION );
++    struct thread *calling_thread = get_thread_from_handle(
++        req->calling_thread_handle,
++        THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION
++    );
+ 
+     if (!process) return;
+     if (process->unix_pid != -1)
+@@ -1576,6 +1611,12 @@ DECL_HANDLER(get_process_vm_counters)
+                 else if (sscanf( line, "VmSwap: %lu", &value ))
+                     reply->pagefile_usage += (mem_size_t)value * 1024;
+             }
++
++            if (calling_thread->desc_len == sizeof(shader_compiling_thread) &&
++                memicmp_strW(shader_compiling_thread, calling_thread->desc, calling_thread->desc_len) == 0) {
++                fill_vm_counters_using_smaps(reply, process->unix_pid);
++            }
++
+             reply->peak_pagefile_usage = reply->pagefile_usage;
+             fclose( f );
+         }
+diff --git a/server/protocol.def b/server/protocol.def
+index 5d60e7fcda3e81a11a86004a79cef265904a2b9a..75fad816acbd9b5c48337182c14e99001cab993c 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -1050,7 +1050,8 @@ typedef struct
+ 
+ /* Retrieve information about a process memory usage */
+ @REQ(get_process_vm_counters)
+-    obj_handle_t handle;                        /* process handle */
++    obj_handle_t process_handle;                /* process handle */
++    obj_handle_t calling_thread_handle;         /* handle of the calling thread */
+ @REPLY
+     mem_size_t peak_virtual_size;               /* peak virtual memory in bytes */
+     mem_size_t virtual_size;                    /* virtual memory in bytes */
