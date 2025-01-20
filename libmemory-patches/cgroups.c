@@ -337,7 +337,9 @@ static BOOL init_cgroup_memory_info(struct cgroup_memory_info *cg_mem_info)
         cg_mem_info->swap_limit = __UINT64_MAX__;
     }
 
-    /* Get inactive file usage from memory.stat */
+    /* Get reclaimable file pages from memory.stat */
+    cg_mem_info->reclaimable_file_usage = 0;
+
     ret = cgroup_read_stats_begin(
         cgroup_memory_controller_name,
         cg_mem_info->cgroup_name,
@@ -349,25 +351,29 @@ static BOOL init_cgroup_memory_info(struct cgroup_memory_info *cg_mem_info)
         printf("cgroup_read_stats_begin() failed for memory.stat in controller '%s': %s\n",
             cgroup_memory_controller_name,
             cgroup_strerror(ret));
-        cg_mem_info->inactive_file_usage = 0;
         goto error;
     }
 
-    /* Read through memory.stat line by line until we find inactive_file */
-    while(strcmp("inactive_file", cg_stat.name) != 0)
+    /* Read through memory.stat line by line until we find inactive_file and active_file */
+    int found = 0;
+    while(found < 2 && ret != ECGEOF)
     {
+        if ((strcmp("inactive_file", cg_stat.name) == 0) ||
+            (strcmp("active_file", cg_stat.name) == 0))
+        {
+            cg_mem_info->reclaimable_file_usage += strtoull(cg_stat.value, NULL, 10);
+            found++;
+        }
+
         ret = cgroup_read_stats_next(&handle, &cg_stat);
 
         if (ret != 0){
             printf("cgroup_read_stats_next() failed for memory.stat in controller '%s': %s\n",
                 cgroup_memory_controller_name,
                 cgroup_strerror(ret));
-            cg_mem_info->inactive_file_usage = 0;
             goto error;
         }
     }
-
-    cg_mem_info->inactive_file_usage = strtoull(cg_stat.value, NULL, 10);
 
     if (handle) cgroup_read_value_end(&handle);
 
@@ -439,7 +445,9 @@ static BOOL update_cgroup_memory_info(struct cgroup_memory_info *cg_mem_info)
 
     if (handle) cgroup_read_value_end(&handle);
 
-    /* Update inactive file memory usage */
+    /* Update reclaimable file memory usage */
+    cg_mem_info->reclaimable_file_usage = 0;
+
     ret = cgroup_read_stats_begin(
         cgroup_memory_controller_name,
         cg_mem_info->cgroup_name,
@@ -454,9 +462,17 @@ static BOOL update_cgroup_memory_info(struct cgroup_memory_info *cg_mem_info)
         return FALSE;
     }
 
-    /* Read through memory.stat line by line until we find inactive_file */
-    while(strcmp("inactive_file", cg_stat.name) != 0)
+    /* Read through memory.stat line by line until we find inactive_file and active_file */
+    int found = 0;
+    while(found < 2 && ret != ECGEOF)
     {
+        if ((strcmp("inactive_file", cg_stat.name) == 0) ||
+            (strcmp("active_file", cg_stat.name) == 0))
+        {
+            cg_mem_info->reclaimable_file_usage += strtoull(cg_stat.value, NULL, 10);
+            found++;
+        }
+
         ret = cgroup_read_stats_next(&handle, &cg_stat);
 
         if (ret != 0){
@@ -466,8 +482,6 @@ static BOOL update_cgroup_memory_info(struct cgroup_memory_info *cg_mem_info)
             return FALSE;
         }
     }
-
-    cg_mem_info->inactive_file_usage = strtoull(cg_stat.value, NULL, 10);
 
     if (handle) cgroup_read_value_end(&handle);
 
@@ -528,9 +542,9 @@ struct current_memory_info get_current_memory_info(void)
         current_mem_info.totalswap = cg_mem_info->cached_host_total_swap;
 
         /* Calculate current memory usage, excluding reclaimable file pages */
-        if (cg_mem_info->current_usage > cg_mem_info->inactive_file_usage)
+        if (cg_mem_info->current_usage > cg_mem_info->reclaimable_file_usage)
         {
-            current_usage = cg_mem_info->current_usage - cg_mem_info->inactive_file_usage;
+            current_usage = cg_mem_info->current_usage - cg_mem_info->reclaimable_file_usage;
         }
         else
         {

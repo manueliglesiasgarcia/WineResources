@@ -23,7 +23,7 @@ struct cgroup_memory_info
     uint64_t soft_limit;
     uint64_t current_swap_usage;
     uint64_t swap_limit;
-    uint64_t inactive_file_usage;
+    uint64_t reclaimable_file_usage;
     unsigned long long cached_host_total_ram;
     unsigned long long cached_host_total_swap;
 };
