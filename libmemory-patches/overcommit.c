@@ -33,6 +33,11 @@ static const uint32_t page_write_flags =
     PAGE_READWRITE |
     PAGE_WRITECOPY;
 
+/* Win32 memory protection flags that grant writecopy access to a page */
+static const uint32_t page_writecopy_flags =
+    PAGE_EXECUTE_WRITECOPY |
+    PAGE_WRITECOPY;
+
 
 /***********************************************************************
  *           overcommit_prevention_enabled
@@ -145,6 +150,17 @@ void touch_committed_pages(void* base, size_t size, uint32_t protect)
 BOOL has_write_flags(uint32_t protect)
 {
     return (protect & page_write_flags);
+}
+
+
+/***********************************************************************
+ *           has_writecopy_flags
+ *
+ * Determines whether the specified memory protection flags grant writecopy access.
+ */
+BOOL has_writecopy_flags(uint32_t protect)
+{
+    return (protect & page_writecopy_flags);
 }
 
 

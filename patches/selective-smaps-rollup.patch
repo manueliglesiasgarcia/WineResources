@@ -84,7 +84,7 @@ index a0d5ea64d97f1dcf80896081b750837c426a8e2f..41a996b188fe2d99d8849178f64c4aa0
              fclose( f );
          }
 diff --git a/server/protocol.def b/server/protocol.def
-index 5d60e7fcda3e81a11a86004a79cef265904a2b9a..75fad816acbd9b5c48337182c14e99001cab993c 100644
+index 5d60e7fcda3e81a11a86004a79cef265904a2b9a..9923f0ee2017aadb241409593065f2de4760005a 100644
 --- a/server/protocol.def
 +++ b/server/protocol.def
 @@ -1050,7 +1050,8 @@ typedef struct
@@ -97,3 +97,19 @@ index 5d60e7fcda3e81a11a86004a79cef265904a2b9a..75fad816acbd9b5c48337182c14e9900
  @REPLY
      mem_size_t peak_virtual_size;               /* peak virtual memory in bytes */
      mem_size_t virtual_size;                    /* virtual memory in bytes */
+@@ -1441,6 +1442,15 @@ enum server_fd_type
+ };
+ 
+ 
++/* Get the Unix fd for a mapped view */
++@REQ(get_fd_for_address)
++    obj_handle_t process;
++    client_ptr_t addr;
++    obj_handle_t handle;
++@REPLY
++@END
++
++
+ /* Retrieve (or allocate) the client-side directory cache entry */
+ @REQ(get_directory_cache_entry)
+     obj_handle_t handle;        /* handle to the directory */
