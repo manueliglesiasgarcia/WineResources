@@ -61,7 +61,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked --mount=type=cache,t
 
 
 # Retrieve the list of build prerequisites for the selected version of Wine
-RUN curl -fSL "https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/main/source/wine_{{ TEMPLATE_WINE_PACKAGE_VERSION }}~jammy-1.dsc" -o /tmp/wine-deps.dsc
+RUN curl -fSL "https://download.opensuse.org/repositories/Emulators:/Wine:/Debian/xUbuntu_22.04/wine_10.0.0.0~jammy-1.dsc" -o /tmp/wine-deps.dsc
 
 # Install the 64-bit versions of the build prerequisites
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -438,3 +438,28 @@ RUN wine64 reg add "HKLM\\SOFTWARE\\Wow6432Node\\Microsoft\\VSCommon\\17.0\\SQM"
 # Prevent Wine from attempting to display a dialog box in the event of a crash
 # (Without this, execution may hang when running with Xvfb in a headless environment)
 RUN wine64 reg add "HKCU\\Software\\Wine\\WineDbg" /f /v ShowCrashDialog /t REG_DWORD /d 0 && wineserver --wait
+
+USER root
+
+ENV HORDE_SERVER_URL=test
+ENV HORDE_AGENT_IP=test
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked --mount=type=cache,target=/var/lib/apt,sharing=locked \
+	apt-get update && apt-get install -y --no-install-recommends \
+		dotnet-runtime-8.0 nano gettext-base
+USER {{ TEMPLATE_USER_NAME }}
+
+USER root
+RUN mkdir /opt/horde-agent
+
+COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/horde-agent-5.5.0.zip "/tmp/horde-agent-5.5.0.zip"
+
+RUN	unzip /tmp/horde-agent-5.5.0.zip -d /opt/horde-agent && \
+	rm /tmp/horde-agent-5.5.0.zip
+
+COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/appsettings.json.template "/opt/horde-agent/appsettings.json.template"
+COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/start_uba.sh "/opt/horde-agent/start_uba.sh"
+RUN chmod +x /opt/horde-agent/start_uba.sh
+USER {{ TEMPLATE_USER_NAME }}
+
+CMD ["bash","/opt/horde-agent/start_uba.sh"]
