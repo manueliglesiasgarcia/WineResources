@@ -457,6 +457,7 @@ COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/horde-age
 RUN	unzip /tmp/horde-agent-5.5.0.zip -d /opt/horde-agent && \
 	rm /tmp/horde-agent-5.5.0.zip
 
+RUN chown -R {{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} /opt/horde-agent/
 COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/appsettings.json.template "/opt/horde-agent/appsettings.json.template"
 COPY --chown={{ TEMPLATE_USER_NAME }}:{{ TEMPLATE_USER_NAME }} msbuild/start_uba.sh "/opt/horde-agent/start_uba.sh"
 RUN chmod +x /opt/horde-agent/start_uba.sh
